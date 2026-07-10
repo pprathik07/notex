@@ -36,7 +36,7 @@ export function NotesDashboard({ initialNotes, userName }: NotesDashboardProps) 
   const [notes, setNotes] = useState(initialNotes);
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [view, setView] = useState<"list" | "board">("list");
+  const [view, setView] = useState<"list" | "board" | "table">("list");
   const [searching, setSearching] = useState(false);
   const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -45,7 +45,7 @@ export function NotesDashboard({ initialNotes, userName }: NotesDashboardProps) 
 
   useEffect(() => {
     const saved = localStorage.getItem("notex-view");
-    if (saved === "list" || saved === "board") setView(saved);
+    if (saved === "list" || saved === "board" || saved === "table") setView(saved);
   }, []);
 
   const isInitialMount = useRef(true);
@@ -96,14 +96,18 @@ export function NotesDashboard({ initialNotes, userName }: NotesDashboardProps) 
 
   function toggleView() {
     setView((prev) => {
-      const next = prev === "list" ? "board" : "list";
+      const next = prev === "list" ? "board" : prev === "board" ? "table" : "list";
       localStorage.setItem("notex-view", next);
       return next;
     });
   }
 
   async function createNote() {
-    const res = await fetch("/api/notes", { method: "POST" });
+    const res = await fetch("/api/notes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ position: notes.length }),
+    });
     if (!res.ok) {
       toast("Failed to create note");
       return;
@@ -160,9 +164,13 @@ export function NotesDashboard({ initialNotes, userName }: NotesDashboardProps) 
                   id: updated.id,
                   title: updated.title,
                   excerpt: updated.content?.slice(0, 200) ?? n.excerpt,
+                  parentId: updated.parentId ?? n.parentId,
+                  position: updated.position ?? n.position,
                   category: updated.category,
                   status: updated.status,
                   pinned: updated.pinned,
+                  isArchived: updated.isArchived ?? n.isArchived,
+                  isFavorite: updated.isFavorite ?? n.isFavorite,
                   updatedAt: updated.updatedAt,
                 }
               : n,
@@ -194,9 +202,13 @@ export function NotesDashboard({ initialNotes, userName }: NotesDashboardProps) 
           id: copy.id,
           title: copy.title,
           excerpt: copy.content?.slice(0, 200) ?? "",
+          parentId: copy.parentId ?? null,
+          position: copy.position ?? prev.length,
           category: copy.category,
           status: copy.status,
           pinned: copy.pinned,
+          isArchived: copy.isArchived ?? false,
+          isFavorite: copy.isFavorite ?? false,
           updatedAt: copy.updatedAt,
         },
         ...prev,
@@ -226,7 +238,7 @@ export function NotesDashboard({ initialNotes, userName }: NotesDashboardProps) 
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="secondary" onClick={toggleView}>
-              {view === "list" ? "Board view" : "List view"}
+              {view === "list" ? "Board view" : view === "board" ? "Table view" : "List view"}
             </Button>
             <ThemeToggle />
             <Button onClick={createNote}>New note</Button>
@@ -273,6 +285,36 @@ export function NotesDashboard({ initialNotes, userName }: NotesDashboardProps) 
               onDelete={setDeleteTarget}
             />
           ))}
+        </div>
+      ) : view === "table" ? (
+        <div className="overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-zinc-100 text-xs uppercase tracking-wide text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
+              <tr>
+                <th className="px-3 py-2">Title</th>
+                <th className="px-3 py-2">Category</th>
+                <th className="px-3 py-2">Status</th>
+                <th className="px-3 py-2">Updated</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((note) => (
+                <tr
+                  key={note.id}
+                  className="border-t border-zinc-200 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
+                >
+                  <td className="px-3 py-2">
+                    <Link href={`/notes/${note.id}`} className="font-medium hover:underline">
+                      {note.title}
+                    </Link>
+                  </td>
+                  <td className="px-3 py-2">{categoryMeta[note.category].label}</td>
+                  <td className="px-3 py-2">{statusMeta[note.status].label}</td>
+                  <td className="px-3 py-2 text-zinc-500">{formatRelativeTime(note.updatedAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       ) : (
         <NotesBoard

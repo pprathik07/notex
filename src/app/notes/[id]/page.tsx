@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { NoteEditor } from "@/components/note-editor";
-import { getNoteForUser } from "@/lib/notes-server";
+import { WorkspaceShell } from "@/components/workspace-shell";
+import { ensureBlocksForNote, getNoteForUser } from "@/lib/notes-server";
 import { auth, requireAuth } from "@/lib/auth";
 import { serializeNote } from "@/lib/notes";
 
@@ -23,5 +24,26 @@ export default async function NotePage(props: { params: Promise<{ id: string }> 
     notFound();
   }
 
-  return <NoteEditor key={id} noteId={id} initialNote={serializeNote(note)} />;
+  const rawBlocks = await ensureBlocksForNote(note.id, note.content);
+  const serializedNote = serializeNote(note);
+  const serializedBlocks = rawBlocks.map((block) => ({
+    id: block.id,
+    noteId: block.noteId,
+    type: block.type,
+    content: block.content,
+    props: block.props ?? {},
+    position: block.position,
+    updatedAt: block.updatedAt.toISOString(),
+    createdAt: block.createdAt?.toISOString(),
+  }));
+
+  return (
+    <WorkspaceShell userName={session.user.name ?? "there"}>
+      <NoteEditor
+        key={id}
+        noteId={id}
+        initialNote={{ ...serializedNote, blocks: serializedBlocks } as any}
+      />
+    </WorkspaceShell>
+  );
 }

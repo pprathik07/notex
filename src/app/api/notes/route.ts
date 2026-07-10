@@ -9,8 +9,15 @@ import { serializeNote, serializeNoteListItem } from "@/lib/notes";
 const createSchema = z.object({
   title: z.string().optional(),
   content: z.string().optional(),
+  parentId: z.string().uuid().nullable().optional(),
+  icon: z.string().max(16).nullable().optional(),
+  coverImage: z.string().url().nullable().optional(),
+  position: z.number().int().min(0).optional(),
   category: z.enum(["personal", "work", "ideas", "other"]).optional(),
   status: z.enum(["todo", "in_progress", "done"]).optional(),
+  pinned: z.boolean().optional(),
+  isFavorite: z.boolean().optional(),
+  isArchived: z.boolean().optional(),
 });
 
 export async function GET(request: Request) {
@@ -21,7 +28,8 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const q = searchParams.get("q")?.trim();
-  const data = await getNotesForUser(session.user.id, q);
+  const includeArchived = searchParams.get("includeArchived") === "true";
+  const data = await getNotesForUser(session.user.id, q, includeArchived);
 
   return NextResponse.json(data.map(serializeNoteListItem));
 }
@@ -45,8 +53,15 @@ export async function POST(request: Request) {
       userId: session.user.id,
       title: parsed.data.title ?? "Untitled",
       content: parsed.data.content ?? "",
+      parentId: parsed.data.parentId ?? null,
+      icon: parsed.data.icon ?? null,
+      coverImage: parsed.data.coverImage ?? null,
+      position: parsed.data.position ?? 0,
       category: parsed.data.category ?? "other",
       status: parsed.data.status ?? "todo",
+      pinned: parsed.data.pinned ?? false,
+      isFavorite: parsed.data.isFavorite ?? false,
+      isArchived: parsed.data.isArchived ?? false,
       createdAt: now,
       updatedAt: now,
     })

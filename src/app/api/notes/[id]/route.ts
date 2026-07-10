@@ -5,13 +5,20 @@ import { notes } from "@/drizzle/schema";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { serializeNote } from "@/lib/notes";
+import { ensureBlocksForNote } from "@/lib/notes-server";
 
 const updateSchema = z.object({
   title: z.string().optional(),
   content: z.string().optional(),
+  parentId: z.string().uuid().nullable().optional(),
+  icon: z.string().max(16).nullable().optional(),
+  coverImage: z.string().url().nullable().optional(),
+  position: z.number().int().min(0).optional(),
   category: z.enum(["personal", "work", "ideas", "other"]).optional(),
   status: z.enum(["todo", "in_progress", "done"]).optional(),
   pinned: z.boolean().optional(),
+  isFavorite: z.boolean().optional(),
+  isArchived: z.boolean().optional(),
 });
 
 async function getUserId() {
@@ -34,7 +41,8 @@ export async function GET(_: Request, context: { params: Promise<{ id: string }>
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  return NextResponse.json(serializeNote(note));
+  const blocks = await ensureBlocksForNote(note.id, note.content);
+  return NextResponse.json(serializeNote({ ...note, blocks }));
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {

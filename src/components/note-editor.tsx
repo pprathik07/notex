@@ -3,8 +3,8 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
-import { Pin } from "lucide-react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDown, ArrowUp, Pin, Plus, Star, Trash2 } from "lucide-react";
 import { DeleteDialog } from "@/components/delete-dialog";
 import { EditorSkeleton } from "@/components/skeletons";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,7 @@ import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/toast";
 import { categoryMeta, statusMeta, type NoteCategory, type NoteStatus } from "@/lib/constants";
 import { countWords } from "@/lib/format";
-import type { Note } from "@/lib/notes";
+import type { Note, NoteBlock, NoteBlockType } from "@/lib/notes";
 
 const MarkdownPreview = dynamic(
   () => import("@/components/markdown-preview").then((m) => m.MarkdownPreview),
@@ -29,17 +29,20 @@ type NoteEditorProps = {
 
 export function NoteEditor({ noteId, initialNote }: NoteEditorProps) {
   const [note, setNote] = useState<Note | null>(initialNote ?? null);
+  const [blocks, setBlocks] = useState<NoteBlock[]>(initialNote?.blocks ?? []);
   const [loadError, setLoadError] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">(
     initialNote ? "saved" : "idle",
   );
   const [isDirty, setIsDirty] = useState(false);
+  const [blocksDirty, setBlocksDirty] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(initialNote ? new Date() : null);
   const [showDelete, setShowDelete] = useState(false);
+  const [activeSlashBlock, setActiveSlashBlock] = useState<string | null>(null);
   const saveVersionRef = useRef(0);
   const router = useRouter();
   const toast = useToast();
-  const deferredContent = useDeferredValue(note?.content ?? "");
+  const deferredContent = useDeferredValue(blocks.map((block) => block.content).join("\n"));
 
   useEffect(() => {
     if (initialNote) return;
@@ -47,7 +50,9 @@ export function NoteEditor({ noteId, initialNote }: NoteEditorProps) {
     void fetch(`/api/notes/${noteId}`)
       .then(async (res) => {
         if (!res.ok) throw new Error("Failed to load note");
-        setNote(await res.json());
+        const loaded = (await res.json()) as Note;
+        setNote(loaded);
+        setBlocks(loaded.blocks ?? []);
         setSaveState("saved");
         setLastSavedAt(new Date());
       })
@@ -57,7 +62,7 @@ export function NoteEditor({ noteId, initialNote }: NoteEditorProps) {
       });
   }, [noteId, initialNote]);
 
-  const saveNote = useCallback(
+  const saveNoteMeta = useCallback(
     async (payload: Partial<Note>) => {
       if (!note) return;
 
@@ -87,15 +92,61 @@ export function NoteEditor({ noteId, initialNote }: NoteEditorProps) {
     [note, noteId, toast],
   );
 
+  const saveBlocks = useCallback(async () => {
+    if (!note) return;
+    setSaveState("saving");
+    const payloadBlocks = blocks.map((block, index) => ({
+      id: block.id.includes("temp-") ? undefined : block.id,
+      type: block.type,
+      content: block.content,
+      props: block.props ?? {},
+      position: index,
+    }));
+
+    const res = await fetch(`/api/notes/${noteId}/blocks`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ blocks: payloadBlocks }),
+    });
+
+    if (!res.ok) {
+      setSaveState("error");
+      toast("Failed to save blocks");
+      return;
+    }
+
+    const updatedBlocks = (await res.json()) as NoteBlock[];
+    setBlocks(
+      updatedBlocks.map((block) => ({
+        ...block,
+        updatedAt: new Date(block.updatedAt).toISOString(),
+      })),
+    );
+    setBlocksDirty(false);
+    setSaveState("saved");
+    setLastSavedAt(new Date());
+  }, [blocks, note, noteId, toast]);
+
   useEffect(() => {
     if (!note || !isDirty) return;
 
     const timer = setTimeout(() => {
-      void saveNote({ title: note.title, content: note.content });
+      void saveNoteMeta({
+        title: note.title,
+        content: blocks.map((block) => block.content).join("\n"),
+      });
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [note, note?.title, note?.content, isDirty, saveNote]);
+  }, [note, blocks, isDirty, saveNoteMeta]);
+
+  useEffect(() => {
+    if (!blocksDirty) return;
+    const timer = setTimeout(() => {
+      void saveBlocks();
+    }, 450);
+    return () => clearTimeout(timer);
+  }, [blocksDirty, saveBlocks]);
 
   function markDirty(updater: (prev: Note) => Note) {
     setIsDirty(true);
@@ -106,11 +157,57 @@ export function NoteEditor({ noteId, initialNote }: NoteEditorProps) {
   function updateMeta(payload: Partial<Note>) {
     setIsDirty(true);
     setNote((prev) => (prev ? { ...prev, ...payload } : prev));
-    void saveNote(payload);
+    void saveNoteMeta(payload);
   }
 
-  function insertMarkdown(prefix: string, suffix = "") {
-    markDirty((prev) => ({ ...prev, content: `${prev.content}${prefix}text${suffix}\n` }));
+  function updateBlock(blockId: string, updater: (block: NoteBlock) => NoteBlock) {
+    setBlocksDirty(true);
+    setBlocks((prev) => prev.map((block) => (block.id === blockId ? updater(block) : block)));
+    setSaveState("idle");
+  }
+
+  function addBlock(type: NoteBlockType = "paragraph", index = blocks.length) {
+    const id = `temp-${crypto.randomUUID()}`;
+    const now = new Date().toISOString();
+    const newBlock: NoteBlock = {
+      id,
+      noteId,
+      type,
+      content: "",
+      props: {},
+      position: index,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    setBlocksDirty(true);
+    setBlocks((prev) => {
+      const next = [...prev];
+      next.splice(index, 0, newBlock);
+      return next.map((block, position) => ({ ...block, position }));
+    });
+  }
+
+  function removeBlock(blockId: string) {
+    setBlocksDirty(true);
+    setBlocks((prev) => {
+      const next = prev.filter((block) => block.id !== blockId);
+      return next.length > 0 ? next.map((block, position) => ({ ...block, position })) : [];
+    });
+  }
+
+  function moveBlock(blockId: string, direction: "up" | "down") {
+    setBlocksDirty(true);
+    setBlocks((prev) => {
+      const index = prev.findIndex((block) => block.id === blockId);
+      if (index < 0) return prev;
+      const nextIndex = direction === "up" ? index - 1 : index + 1;
+      if (nextIndex < 0 || nextIndex >= prev.length) return prev;
+      const next = [...prev];
+      const [item] = next.splice(index, 1);
+      next.splice(nextIndex, 0, item);
+      return next.map((block, position) => ({ ...block, position }));
+    });
   }
 
   useEffect(() => {
@@ -118,17 +215,16 @@ export function NoteEditor({ noteId, initialNote }: NoteEditorProps) {
       if (!(e.ctrlKey || e.metaKey)) return;
       if (e.key === "s") {
         e.preventDefault();
-        if (note) void saveNote({ title: note.title, content: note.content });
-      }
-      if (e.key === "b") {
-        e.preventDefault();
-        insertMarkdown("**", "**");
+        if (note) {
+          void saveNoteMeta({ title: note.title, content: blocks.map((block) => block.content).join("\n") });
+          void saveBlocks();
+        }
       }
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  });
+  }, [blocks, note, saveBlocks, saveNoteMeta]);
 
   async function remove() {
     const res = await fetch(`/api/notes/${noteId}`, { method: "DELETE" });
@@ -137,14 +233,14 @@ export function NoteEditor({ noteId, initialNote }: NoteEditorProps) {
       return;
     }
     toast("Note deleted");
-    router.push("/");
+    router.push("/app");
   }
 
   if (loadError) {
     return (
       <div className="mx-auto max-w-6xl p-8 text-center">
         <p className="mb-4 text-zinc-600 dark:text-zinc-300">Note not found or failed to load.</p>
-        <Button onClick={() => router.push("/")}>Back to dashboard</Button>
+        <Button onClick={() => router.push("/app")}>Back to dashboard</Button>
       </div>
     );
   }
@@ -167,7 +263,7 @@ export function NoteEditor({ noteId, initialNote }: NoteEditorProps) {
   return (
     <div className="mx-auto w-full max-w-6xl p-4 md:p-8">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <Link href="/" className="text-sm text-zinc-600 hover:underline dark:text-zinc-300">
+        <Link href="/app" className="text-sm text-zinc-600 hover:underline dark:text-zinc-300">
           Back to dashboard
         </Link>
         <div className="flex items-center gap-2 text-xs text-zinc-500">
@@ -177,6 +273,13 @@ export function NoteEditor({ noteId, initialNote }: NoteEditorProps) {
             className="rounded border border-zinc-300 px-2 py-1 focus-visible:ring-2 focus-visible:ring-zinc-400 dark:border-zinc-700"
           >
             <Pin size={14} className={note.pinned ? "inline fill-current" : "inline"} />
+          </button>
+          <button
+            onClick={() => updateMeta({ isFavorite: !note.isFavorite })}
+            aria-label={note.isFavorite ? "Unfavorite note" : "Favorite note"}
+            className="rounded border border-zinc-300 px-2 py-1 focus-visible:ring-2 focus-visible:ring-zinc-400 dark:border-zinc-700"
+          >
+            <Star size={14} className={note.isFavorite ? "inline fill-current" : "inline"} />
           </button>
           <span aria-live="polite">{saveLabel}</span>
           <Button variant="secondary" className="px-2 py-1 text-xs" onClick={() => setShowDelete(true)}>
@@ -216,31 +319,125 @@ export function NoteEditor({ noteId, initialNote }: NoteEditorProps) {
         </Select>
       </div>
 
-      <div className="mb-2 flex flex-wrap gap-2">
-        <Button variant="secondary" className="px-2 py-1 text-xs" onClick={() => insertMarkdown("**", "**")}>
-          Bold
+      <div className="mb-3 flex flex-wrap gap-2">
+        <Button variant="secondary" className="px-2 py-1 text-xs" onClick={() => addBlock("paragraph")}>
+          <Plus size={14} /> Add block
         </Button>
-        <Button variant="secondary" className="px-2 py-1 text-xs" onClick={() => insertMarkdown("# ")}>
-          Heading
-        </Button>
-        <Button variant="secondary" className="px-2 py-1 text-xs" onClick={() => insertMarkdown("- ")}>
-          List
+        <Button variant="secondary" className="px-2 py-1 text-xs" onClick={() => updateMeta({ isArchived: true })}>
+          Archive page
         </Button>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <textarea
-          value={note.content}
-          onChange={(e) => markDirty((prev) => ({ ...prev, content: e.target.value }))}
-          className="min-h-[70vh] rounded-xl border border-zinc-300 bg-white p-4 font-mono text-sm outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:border-zinc-700 dark:bg-zinc-900"
-          placeholder="# Write markdown..."
-        />
+        <div className="min-h-[70vh] space-y-2 rounded-xl border border-zinc-300 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-900">
+          {blocks.length === 0 ? (
+            <button
+              onClick={() => addBlock("paragraph")}
+              className="rounded-md border border-dashed border-zinc-300 px-3 py-2 text-sm text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              Add your first block
+            </button>
+          ) : null}
+
+          {blocks.map((block, index) => (
+            <div key={block.id} className="group rounded-lg border border-zinc-200 p-2 dark:border-zinc-800">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <Select
+                  value={block.type}
+                  onChange={(e) => updateBlock(block.id, (prev) => ({ ...prev, type: e.target.value as NoteBlockType }))}
+                  aria-label="Block type"
+                  className="w-44"
+                >
+                  <option value="paragraph">Paragraph</option>
+                  <option value="heading1">Heading 1</option>
+                  <option value="heading2">Heading 2</option>
+                  <option value="heading3">Heading 3</option>
+                  <option value="bulleted_list">Bulleted list</option>
+                  <option value="numbered_list">Numbered list</option>
+                  <option value="todo">Todo</option>
+                  <option value="quote">Quote</option>
+                  <option value="code">Code</option>
+                </Select>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => moveBlock(block.id, "up")}
+                    className="rounded border border-zinc-300 p-1 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                    aria-label="Move block up"
+                  >
+                    <ArrowUp size={14} />
+                  </button>
+                  <button
+                    onClick={() => moveBlock(block.id, "down")}
+                    className="rounded border border-zinc-300 p-1 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                    aria-label="Move block down"
+                  >
+                    <ArrowDown size={14} />
+                  </button>
+                  <button
+                    onClick={() => removeBlock(block.id)}
+                    className="rounded border border-red-200 p-1 text-red-500 hover:bg-red-50 dark:border-red-800 dark:hover:bg-red-900/20"
+                    aria-label="Delete block"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+              <textarea
+                value={block.content}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (value.startsWith("/")) {
+                    setActiveSlashBlock(block.id);
+                  } else {
+                    setActiveSlashBlock(null);
+                  }
+                  updateBlock(block.id, (prev) => ({ ...prev, content: value }));
+                  markDirty((prev) => ({ ...prev, content: [...blocks].map((b) => (b.id === block.id ? value : b.content)).join("\n") }));
+                }}
+                placeholder={index === 0 ? "Type '/' for commands..." : "Write..."}
+                className="min-h-[70px] w-full resize-y rounded-md border border-zinc-200 bg-transparent p-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:border-zinc-700"
+              />
+              {activeSlashBlock === block.id ? (
+                <div className="mt-2 flex flex-wrap gap-1 rounded-md border border-zinc-200 bg-zinc-50 p-2 text-xs dark:border-zinc-700 dark:bg-zinc-800">
+                  {(
+                    [
+                      ["paragraph", "Paragraph"],
+                      ["heading1", "Heading 1"],
+                      ["heading2", "Heading 2"],
+                      ["heading3", "Heading 3"],
+                      ["bulleted_list", "Bulleted List"],
+                      ["numbered_list", "Numbered List"],
+                      ["todo", "Todo"],
+                      ["quote", "Quote"],
+                      ["code", "Code"],
+                    ] as Array<[NoteBlockType, string]>
+                  ).map(([value, label]) => (
+                    <button
+                      key={value}
+                      onClick={() => {
+                        updateBlock(block.id, (prev) => ({
+                          ...prev,
+                          type: value,
+                          content: prev.content.startsWith("/") ? prev.content.slice(1) : prev.content,
+                        }));
+                        setActiveSlashBlock(null);
+                      }}
+                      className="rounded border border-zinc-300 px-2 py-1 hover:bg-zinc-100 dark:border-zinc-600 dark:hover:bg-zinc-700"
+                    >
+                      / {label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
         <article className="prose min-h-[70vh] max-w-none overflow-auto rounded-xl border border-zinc-300 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-900">
           <MarkdownPreview content={deferredContent} />
         </article>
       </div>
 
-      <p className="mt-2 text-xs text-zinc-500">{countWords(note.content)} words</p>
+      <p className="mt-2 text-xs text-zinc-500">{countWords(deferredContent)} words</p>
 
       <DeleteDialog
         open={showDelete}
