@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { NoteEditor } from "@/components/note-editor";
 import { getNoteForUser } from "@/lib/notes-server";
-import { auth } from "@/lib/auth";
+import { auth, requireAuth } from "@/lib/auth";
 import { serializeNote } from "@/lib/notes";
 
 export async function generateMetadata(props: { params: Promise<{ id: string }> }) {
@@ -15,9 +15,9 @@ export async function generateMetadata(props: { params: Promise<{ id: string }> 
 }
 
 export default async function NotePage(props: { params: Promise<{ id: string }> }) {
-  const session = await auth();
+  const session = await requireAuth();
   const { id } = await props.params;
-  const note = await getNoteForUser(session!.user!.id, id);
+  const note = await getNoteForUser(session.user.id, id);
 
   if (!note) {
     notFound();

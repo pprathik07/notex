@@ -43,6 +43,7 @@ export function RegisterForm() {
       router.push("/login");
       return;
     }
+    router.refresh();
     router.push("/");
   }
 

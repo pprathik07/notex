@@ -27,6 +27,7 @@ export function LoginForm() {
       setError("Invalid credentials");
       return;
     }
+    router.refresh();
     router.push("/");
   }
 

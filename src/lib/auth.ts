@@ -1,6 +1,7 @@
 import { compare } from "bcryptjs";
 import CredentialsProvider from "next-auth/providers/credentials";
-import { getServerSession, type NextAuthOptions } from "next-auth";
+import { getServerSession, type NextAuthOptions, type Session } from "next-auth";
+import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { users } from "@/drizzle/schema";
@@ -64,4 +65,14 @@ export const authOptions: NextAuthOptions = {
 
 export function auth() {
   return getServerSession(authOptions);
+}
+
+export async function requireAuth(): Promise<Session> {
+  const session = await auth();
+
+  if (!session?.user?.id) {
+    redirect("/login");
+  }
+
+  return session;
 }
