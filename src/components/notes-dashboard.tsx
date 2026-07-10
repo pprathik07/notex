@@ -230,7 +230,7 @@ export function NotesDashboard({ initialNotes, userName }: NotesDashboardProps) 
             </Button>
             <ThemeToggle />
             <Button onClick={createNote}>New note</Button>
-            <Button variant="secondary" onClick={() => signOut({ callbackUrl: "/login" })}>
+            <Button variant="secondary" onClick={() => signOut({ callbackUrl: "/" })}>
               Logout
             </Button>
           </div>
